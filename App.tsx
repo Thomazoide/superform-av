@@ -13,11 +13,15 @@ import {
 } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
 import * as Location from 'expo-location';
+import { CREATE_SUPERFORM_ENDPOINT } from './constants/endpoints';
+import { SuperForm } from './models/superForm';
+import { ResponsePayload } from './models/responses';
 
 export default function App() {
   const [imageUri, setImageUri] = useState<string | null>(null);
   const [description, setDescription] = useState<string>('');
   const [location, setLocation] = useState<Location.LocationObject | null>(null);
+  const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
 
   useEffect(() => {
     requestPermissions();
@@ -45,13 +49,15 @@ export default function App() {
     try {
       const result = await ImagePicker.launchCameraAsync({
         mediaTypes: ImagePicker.MediaTypeOptions.Images,
-        allowsEditing: true,
-        aspect: [4, 3],
-        quality: 0.8,
+        allowsEditing: false,
+        quality: 0.7,
+        cameraType: ImagePicker.CameraType.back,
       });
 
       if (!result.canceled && result.assets[0]) {
         setImageUri(result.assets[0].uri);
+        // Prefetch ubicación para que el envío quede listo
+        getCurrentLocation();
       }
     } catch {
       Alert.alert('Error', 'No se pudo tomar la foto');
@@ -86,40 +92,83 @@ export default function App() {
       return;
     }
 
-    // Aquí puedes guardar los datos donde necesites
-    const formData = {
-      image: imageUri,
-      description: description.trim(),
-      latitude: currentLocation.coords.latitude,
-      longitude: currentLocation.coords.longitude,
-      timestamp: new Date().toISOString(),
+    const trimmedDescription = description.trim();
+    const fileName = imageUri.split('/').pop() ?? `foto-${Date.now()}.jpg`;
+    const fileExtension = fileName.split('.').pop()?.toLowerCase();
+    const mimeType = fileExtension === 'png' ? 'image/png' : 'image/jpeg';
+
+    const superFormPayload: SuperForm = {
+      foto: imageUri,
+      description: trimmedDescription || undefined,
+      lat: currentLocation.coords.latitude,
+      lng: currentLocation.coords.longitude,
     };
 
-    // Mostrar datos del formulario (para prueba)
-    Alert.alert(
-      'Formulario enviado',
-      `Foto: ${imageUri ? 'Incluida' : 'No incluida'}
-Descripción: ${description || 'Sin descripción'}
-Latitud: ${currentLocation.coords.latitude}
-Longitud: ${currentLocation.coords.longitude}`,
-      [
-        {
-          text: 'OK',
-          onPress: () => {
-            // Limpiar formulario
-            setImageUri(null);
-            setDescription('');
-            setLocation(null);
-          }
-        }
-      ]
-    );
+    const body = new FormData();
+    body.append('foto', {
+      uri: imageUri,
+      name: fileName,
+      type: mimeType,
+    } as any);
+    body.append('lat', String(superFormPayload.lat));
+    body.append('lng', String(superFormPayload.lng));
 
-    console.log('Datos del formulario:', formData);
+    if (trimmedDescription) {
+      body.append('description', trimmedDescription);
+    }
+
+    try {
+      setIsSubmitting(true);
+
+      const response = await fetch(CREATE_SUPERFORM_ENDPOINT, {
+        method: 'POST',
+        body,
+      });
+
+      const jsonResponse = (await response.json().catch(() => null)) as ResponsePayload<SuperForm> | null;
+
+      if (!response.ok) {
+        const backendMessage = jsonResponse?.message ?? 'Ocurrió un error al enviar el formulario.';
+        throw new Error(backendMessage);
+      }
+
+      Alert.alert(
+        'Formulario enviado',
+        `Foto: ${imageUri ? 'Incluida' : 'No incluida'}
+Descripción: ${trimmedDescription || 'Sin descripción'}
+Latitud: ${superFormPayload.lat}
+Longitud: ${superFormPayload.lng}`,
+        [
+          {
+            text: 'OK',
+            onPress: () => {
+              // Limpiar formulario después del envío exitoso
+              setImageUri(null);
+              setDescription('');
+              setLocation(null);
+            },
+          },
+        ]
+      );
+
+      console.log('Datos enviados:', superFormPayload);
+      if (jsonResponse) {
+        console.log('Respuesta backend:', jsonResponse);
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'No se pudo enviar el formulario.';
+      Alert.alert('Error', message);
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   return (
-    <ScrollView style={styles.container}>
+    <ScrollView 
+      style={styles.container}
+      contentContainerStyle={styles.scrollContent}
+      keyboardShouldPersistTaps="handled"
+    >
       <View style={styles.content}>
         <Text style={styles.title}>Súper formulario</Text>
         
@@ -158,11 +207,16 @@ Longitud: ${currentLocation.coords.longitude}`,
 
         {/* Botón de envío */}
         <TouchableOpacity 
-          style={[styles.submitButton, !imageUri && styles.submitButtonDisabled]} 
+          style={[
+            styles.submitButton,
+            (!imageUri || isSubmitting) && styles.submitButtonDisabled,
+          ]}
           onPress={submitForm}
-          disabled={!imageUri}
+          disabled={!imageUri || isSubmitting}
         >
-          <Text style={styles.submitButtonText}>Enviar Formulario</Text>
+          <Text style={styles.submitButtonText}>
+            {isSubmitting ? 'Enviando...' : 'Enviar Formulario'}
+          </Text>
         </TouchableOpacity>
 
         {/* Información de ubicación */}
@@ -183,6 +237,10 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: '#f5f5f5',
+  },
+  scrollContent: {
+    flexGrow: 1,
+    paddingBottom: 40,
   },
   content: {
     padding: 20,

@@ -1,0 +1,1 @@
+export const CREATE_SUPERFORM_ENDPOINT = "https://areas-verdes-backend.onrender.com/super-form" //usar POST
